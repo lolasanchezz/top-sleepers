@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+from datetime import datetime, timedelta
 from pyairtable import Api
 from dotenv import load_dotenv
 
@@ -12,9 +13,10 @@ table = api.table(os.environ.get('APP_KEY'), os.environ.get('PROJECTS_TABLE_KEY'
 all_projects = table.all()
 class user_info:
     projects: list[str]
-    hackatime_name: str
+    hackatime_id: str
     total_hours: int
 info_dict = {}
+start_date = datetime.now().isoformat()
 for entry in all_projects:
         email = entry["fields"]["email (from registered_users)"][0]
        
@@ -28,13 +30,23 @@ for entry in all_projects:
                      },
                      data=json.dumps({"email": email}))
             print(res.json()["user_id"])
-            info_dict[email].hackatime_email = res.json()["user_id"]
+            info_dict[email].hackatime_id = res.json()["user_id"]
+            print(info_dict[email].hackatime_id)
+            res = requests.get(url=f"https://hackatime.hackclub.com/api/v1/users/{info_dict[email].hackatime_id}/stats?features=projects&start_date={start_date}",
+                               headers={
+                                   'Content-Type': 'application/json',
+                                    'Authorization': f'Bearer {os.environ.get('HACKATIME_API_KEY')}'
+                                    }
+                               )
+            print(res)
+        cur_project = ""
         try:
             cur_project = entry["fields"]['hackatime_name']
-            
         except KeyError:
             print(f"user {email} didn't have an associated hackatime project name. skipping!" )
             continue
+        
+
         
        
         
