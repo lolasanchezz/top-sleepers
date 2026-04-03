@@ -4,6 +4,7 @@ from pyairtable import Api
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
+import threading
 from datetime import datetime, timedelta
 from refreshData import refreshData
 
@@ -15,7 +16,9 @@ load_dotenv()
 app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
 
 
-REFRESH_PROJECTS_TIMEOUT = timedelta(minutes=5)
+REFRESH_PROJECTS_TIMEOUT = timedelta(hours=16)
+channel_stop_events = {}
+channel_lock = threading.Lock()
 
 
 def makeBlock(slack_id, hours, lastProject, rank):
@@ -57,10 +60,29 @@ def organizeData(data):
     return blocks
 
 
+def refresh_loop(channel_id, message_ts, client, stop_event):
+    while not stop_event.is_set():
+        data = refreshData()
+        blocks = organizeData(data)
+        client.chat_update(channel=channel_id, ts=message_ts, blocks=blocks)
+        stop_event.wait(REFRESH_PROJECTS_TIMEOUT.total_seconds())
+
+    with channel_lock:
+        channel_stop_events.pop(channel_id, None)
+
+
 # Listens to incoming messages that contain "hello"
 @app.message("show me the leaderboard!")
 def message_hello(message, say, client):
     channel_id = message["channel"]
+
+    with channel_lock:
+        if channel_id in channel_stop_events:
+            client.chat_postMessage(
+                channel=channel_id,
+                text="Leaderboard is already running in this channel. Say 'stop leaderboard' to stop it.",
+            )
+            return
 
     response = client.chat_postMessage(
         channel=channel_id,
@@ -73,16 +95,33 @@ def message_hello(message, say, client):
     )
     message_ts = response["ts"]
 
-    print("running")
-    data = refreshData()
-    blocks = organizeData(data)
-    client.chat_update(channel=channel_id, ts=message_ts, blocks=blocks)
-    last_refresh = datetime.now()
-    while False:
-        if datetime.now() - last_refresh > REFRESH_PROJECTS_TIMEOUT:
-            # data = refreshData()
-            client.chat_update(channel=channel_id, ts=message_ts, blocks=blocks)
-        # last_refresh = datetime.now()
+    stop_event = threading.Event()
+    with channel_lock:
+        channel_stop_events[channel_id] = stop_event
+
+    worker = threading.Thread(
+        target=refresh_loop,
+        args=(channel_id, message_ts, client, stop_event),
+        daemon=True,
+    )
+    worker.start()
+
+
+@app.message("stop leaderboard")
+def stop_leaderboard(message, say, client):
+    channel_id = message["channel"]
+    with channel_lock:
+        stop_event = channel_stop_events.get(channel_id)
+
+    if stop_event is None:
+        client.chat_postMessage(
+            channel=channel_id,
+            text="No running leaderboard refresh found in this channel.",
+        )
+        return
+
+    stop_event.set()
+    client.chat_postMessage(channel=channel_id, text="Stopped leaderboard refresh.")
 
 
 # Start your app
