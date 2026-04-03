@@ -1,8 +1,8 @@
 import math
 import os
 from pyairtable import Api
-from slack_bolt import App
-from slack_bolt.adapter.socket_mode import SocketModeHandler
+from flask import Flask, request
+from slack_bolt.adapter.flask import SlackRequestHandler
 from dotenv import load_dotenv
 import threading
 from datetime import datetime, timedelta
@@ -13,7 +13,20 @@ from refreshData import refreshData
 # see: https://docs.slack.dev/tools/bolt-python/getting-started
 load_dotenv()
 # Initializes your app with your bot token
-app = App(token=os.environ.get("SLACK_BOT_TOKEN"))
+app = App(
+    token=os.environ["SLACK_BOT_TOKEN"],
+    signing_secret=os.environ["SLACK_SIGNING_SECRET"],
+)
+
+flask_app = Flask(__name__)
+handler = SlackRequestHandler(app)
+@flask_app.route("/slack/events", methods=["POST"])
+def slack_events():
+    return handler.handle(request)
+
+@flask_app.get("/")
+def healthcheck():
+    return "ok", 200
 
 
 REFRESH_PROJECTS_TIMEOUT = timedelta(hours=16)
@@ -125,5 +138,7 @@ def stop_leaderboard(message, say, client):
 
 
 # Start your app
+
 if __name__ == "__main__":
-    SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    
